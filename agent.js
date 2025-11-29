@@ -12,7 +12,6 @@ const { z } = require("zod");
 let model;
 
 require("dotenv").config();
-require("dotenv-vault-core").config();
 
 if (
   !process.env.BASE_URL ||

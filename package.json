@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@openai/agents": "^0.3.3",
-    "dotenv": "^17.2.3",
-    "dotenv-vault-core": "^0.7.1",
+    "dotenv-vault": "^1.27.0",
+    "dotenv": "^16.1.0",
     "express": "^5.1.0",
     "zod": "^3.25.76"
   },
