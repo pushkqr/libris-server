@@ -17,8 +17,10 @@ const book = new Book({
   title: "Computer Networks",
   author: "Andrew S. Tanenbaum, David J. Wetherall",
   edition: "5th edition",
+  isbn: "978-0132126953",
+  coverUrl: "https://covers.openlibrary.org/b/isbn/978-0132126953-L.jpg",
   overview:
-    "This textbook provides a structured approach to explaining how networks work from the inside out. It covers key principles and illustrates them using real-world examples such as the Internet, Wireless LANs, broadband wireless, and Bluetooth. The fifth edition includes a dedicated chapter on network security and is suitable for both undergraduate and graduate-level courses.",
+    "This textbook provides a structured approach to explaining how networks work from the inside out...",
 });
 book.save();
 console.log(book.getId());

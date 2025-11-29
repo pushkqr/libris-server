@@ -7,20 +7,25 @@ class Book {
   #title;
   #author;
   #edition;
+  #isbn;
+  #coverUrl;
   #overview;
+
+  static PLACEHOLDER =
+    "https://rhbooks.com.ng/wp-content/uploads/2022/03/book-placeholder.png";
 
   constructor(book) {
     this.#title = book.title;
     this.#author = book.author;
     this.#edition = book.edition;
+    this.#isbn = book.isbn;
+    this.#coverUrl = book.coverUrl;
     this.#overview = book.overview;
     this.#id = this.#generateId();
   }
 
   #generateId() {
-    const normalized = `${this.#title}|${this.#author}|${this.#edition}`
-      .toLowerCase()
-      .trim();
+    const normalized = `${this.#title}|${this.#author}`.toLowerCase().trim();
 
     const hash = crypto
       .createHash("sha256")
@@ -42,6 +47,12 @@ class Book {
   getEdition() {
     return this.#edition;
   }
+  getISBN() {
+    return this.#isbn;
+  }
+  getCoverURL() {
+    return this.#coverUrl;
+  }
   getOverview() {
     return this.#overview;
   }
@@ -52,6 +63,8 @@ class Book {
       title: this.#title,
       author: this.#author,
       edition: this.#edition,
+      isbn: this.#isbn,
+      coverUrl: this.#coverUrl,
       overview: this.#overview,
     };
   }
