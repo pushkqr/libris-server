@@ -17,7 +17,6 @@ const book = new Book({
   title: "Computer Networks",
   author: "Andrew S. Tanenbaum, David J. Wetherall",
   edition: "5th edition",
-  isbn: "978-0132126953",
   coverUrl: "https://covers.openlibrary.org/b/isbn/978-0132126953-L.jpg",
   overview:
     "This textbook provides a structured approach to explaining how networks work from the inside out...",

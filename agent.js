@@ -1,4 +1,6 @@
 const Book = require("./models/book");
+// const { imageSize } = require("image-size");
+// const { Buffer } = require("buffer");
 
 const {
   Agent,
@@ -7,6 +9,7 @@ const {
   setDefaultOpenAIClient,
   setOpenAIAPI,
   MCPServerStdio,
+  tool,
 } = require("@openai/agents");
 const OpenAI = require("openai");
 const { z } = require("zod");
@@ -19,10 +22,11 @@ if (
   !process.env.BASE_URL ||
   !process.env.API_KEY ||
   !process.env.MODEL_NAME ||
-  !process.env.BRAVE_API_KEY
+  !process.env.BRAVE_API_KEY ||
+  !process.env.SERPER_API_KEY
 ) {
   throw new Error(
-    "Please set BASE_URL, API_KEY, MODEL_NAME, BRAVE_API_KEY via env var."
+    "Please set BASE_URL, API_KEY, MODEL_NAME, BRAVE_API_KEY, SERPER_API_KEY via env var."
   );
 }
 
@@ -33,20 +37,18 @@ const LinksSchema = z.object({
 const BookSchema = z.object({
   title: z.string(),
   author: z.string(),
-  edition: z.string(),
   overview: z.string(),
-  isbn: z.string(),
-  coverUrl: z.string().default(Book.PLACEHOLDER),
+  coverUrl: z.string(),
 });
 const BooksSchema = z.object({
-  books: z.array(BookSchema).max(10),
+  books: z.array(BookSchema).max(5),
 });
 
 class Model {
   #client;
   #linkAgent;
   #searchAgent;
-  #tools = [];
+  #mcpServers = [];
   #initialized = false;
 
   constructor() {
@@ -67,7 +69,98 @@ class Model {
       env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY },
     });
     await braveServer.connect();
-    this.#tools.push(braveServer);
+    this.#mcpServers.push(braveServer);
+
+    const fetchBooksTool = tool({
+      name: "fetch_book",
+      description:
+        "Fetch relevant books based on the query provided. Returns an array of objects, each with metadata about a book matching the query sorted by relevance.",
+      parameters: z.object({ query: z.string() }),
+      execute: async function ({ query }) {
+        const encoded = encodeURIComponent(query);
+        console.log(`https://openlibrary.org/search.json?q=${encoded}`);
+        try {
+          let timer;
+          const res = await Promise.race([
+            fetch(`https://openlibrary.org/search.json?q=${encoded}`),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error("Request timed out"));
+              }, 5000);
+            }),
+          ]);
+
+          clearTimeout(timer);
+          if (!res.ok) {
+            return {
+              error: "fetch-failed",
+              books: [],
+            };
+          }
+
+          const data = await res.json();
+          const parse = data.docs.slice(0, 5);
+          const books = parse.map((b) => {
+            const coverUrl = b.cover_i
+              ? `https://covers.openlibrary.org/b/id/${b.cover_i}-L.jpg`
+              : Book.PLACEHOLDER;
+            return {
+              title: b.title,
+              author: b.author_name.join(", "),
+              cover_i: b.cover_i,
+              coverUrl: coverUrl,
+            };
+          });
+
+          return {
+            books: books,
+          };
+        } catch (error) {
+          return {
+            error: error.message,
+            books: [],
+          };
+        }
+      },
+    });
+    const searchTool = tool({
+      name: "serper_search",
+      description:
+        "Performs a web search using Serper and returns relevant results.",
+      parameters: z.object({ query: z.string() }),
+      execute: async function ({ query }) {
+        try {
+          let timer;
+          const res = await Promise.race([
+            fetch(
+              `https://google.serper.dev/search?q=${encodeURIComponent(
+                query
+              )}&apiKey=${process.env.SERPER_API_KEY}`
+            ),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error("Request timed out"));
+              }, 5000);
+            }),
+          ]);
+
+          clearTimeout(timer);
+
+          if (!res.ok) {
+            return {
+              error: "fetch-failed",
+            };
+          }
+
+          const data = await res.json();
+          return {
+            result: data,
+          };
+        } catch (error) {
+          return { error: error.message };
+        }
+      },
+    });
 
     this.#linkAgent = new Agent({
       name: "Link Agent",
@@ -79,21 +172,16 @@ class Model {
     this.#searchAgent = new Agent({
       name: "Search Agent",
       instructions: `You are a book search assistant. Given a book query:
-1. Use Brave Search to find relevant published books (skip articles/videos/lists).
-2. If the query specifies an edition (e.g., "5th edition", "2023 edition"), search for that specific edition.
-3. If NO edition is specified, only return the most recent or most popular edition available.
-4. For each result provide:
-   - "title": full accurate title (include edition in title if relevant, e.g., "Operating Systems: 10th Edition")
-   - "author": full author name ("" if unknown)
-   - "edition": edition text like "10th edition", "2023" or "" if unknown
-   - "overview": a concise factual overview (no opinions, no large quotes, no spoilers). If insufficient data, use ""
-   - "isbn": International Standard Book Number (ISBN-10 or ISBN-13)
-   - "coverUrl": direct URL to valid book cover image. Prefer OpenLibrary covers (https://covers.openlibrary.org/b/isbn/{ISBN}-L.jpg) or Google Books.
-5. Return STRICT JSON: {"books": [{"title": "...", "author": "...", "edition": "", "overview": "", "isbn": "", "coverUrl": ""}, ...]}
-6. Maximum 10 results ordered by relevance.
-7. No commentary, no code fences, only the JSON object.`,
+1. Call tool "fetch_book" with the query to get up to 5 candidate books.
+2. For each candidate build fields:
+   - "title": exact title
+   - "author": author(s) or ""
+   - "overview": use tool "serper_search" with 'Book <title> overview' and distill to 2-3 neutral sentences (no opinions, no spoilers). If insufficient data use "".
+   - "coverUrl": use https://covers.openlibrary.org/b/id/{cover_i}-L.jpg or placeholder if cover_i missing
+3. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"..."}, ...]}
+4. No commentary, no code fences.`,
       model: process.env.MODEL_NAME,
-      mcpServers: [braveServer],
+      tools: [fetchBooksTool, searchTool],
     });
 
     this.#initialized = true;
@@ -107,7 +195,9 @@ class Model {
         .trim();
     }
     try {
-      const parsed = JSON.parse(raw);
+      let parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && schema === BooksSchema)
+        parsed = { books: parsed };
       return schema.parse(parsed);
     } catch (error) {
       console.error("Parse error:", error.message, "\nRaw:", raw);
@@ -116,14 +206,15 @@ class Model {
   }
 
   async #invoke(agent, query) {
-    return Promise.race([
-      run(agent, query),
-      new Promise((_, reject) => {
-        setTimeout(() => {
-          reject(new Error("Agent Timeout"));
-        }, 30000);
-      }),
-    ]);
+    return run(agent, query);
+    // return Promise.race([
+    //   run(agent, query),
+    //   new Promise((_, reject) => {
+    //     setTimeout(() => {
+    //       reject(new Error("Agent Timeout"));
+    //     }, 60000);
+    //   }),
+    // ]);
   }
 
   async search(query) {
@@ -143,7 +234,7 @@ class Model {
   }
 
   async cleanup() {
-    for (const tool of this.#tools) {
+    for (const tool of this.#mcpServers) {
       try {
         await tool.close();
       } catch {}

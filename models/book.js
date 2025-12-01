@@ -6,8 +6,6 @@ class Book {
   #id;
   #title;
   #author;
-  #edition;
-  #isbn;
   #coverUrl;
   #overview;
 
@@ -17,8 +15,6 @@ class Book {
   constructor(book) {
     this.#title = book.title;
     this.#author = book.author;
-    this.#edition = book.edition;
-    this.#isbn = book.isbn;
     this.#coverUrl = book.coverUrl;
     this.#overview = book.overview;
     this.#id = this.#generateId();
@@ -44,12 +40,6 @@ class Book {
   getAuthor() {
     return this.#author;
   }
-  getEdition() {
-    return this.#edition;
-  }
-  getISBN() {
-    return this.#isbn;
-  }
   getCoverURL() {
     return this.#coverUrl;
   }
@@ -62,8 +52,6 @@ class Book {
       id: this.#id,
       title: this.#title,
       author: this.#author,
-      edition: this.#edition,
-      isbn: this.#isbn,
       coverUrl: this.#coverUrl,
       overview: this.#overview,
     };
