@@ -39,6 +39,10 @@ const BookSchema = z.object({
   author: z.string(),
   overview: z.string(),
   coverUrl: z.string(),
+  isbn: z.string(),
+  year: z.string(),
+  genre: z.array(z.string()),
+  pages: z.string(),
 });
 const BooksSchema = z.object({
   books: z.array(BookSchema).max(5),
@@ -58,7 +62,7 @@ class Model {
     });
     setDefaultOpenAIClient(this.#client);
     setOpenAIAPI("chat_completions");
-    setTracingDisabled(false);
+    setTracingDisabled(process.env.DEBUG !== "true");
   }
 
   async #init() {
@@ -74,52 +78,92 @@ class Model {
     const fetchBooksTool = tool({
       name: "fetch_book",
       description:
-        "Fetch relevant books based on the query provided. Returns an array of objects, each with metadata about a book matching the query sorted by relevance.",
+        "Fetch relevant books from OpenLibrary with detailed metadata (overview, pages, etc.).",
       parameters: z.object({ query: z.string() }),
       execute: async function ({ query }) {
         const encoded = encodeURIComponent(query);
-        console.log(`https://openlibrary.org/search.json?q=${encoded}`);
         try {
           let timer;
           const res = await Promise.race([
-            fetch(`https://openlibrary.org/search.json?q=${encoded}`),
+            fetch(
+              `https://openlibrary.org/search.json?q=${encoded}&fields=key,title,author_name,cover_i,isbn,number_of_pages_median,first_publish_year&limit=5`
+            ),
             new Promise((_, reject) => {
-              timer = setTimeout(() => {
-                reject(new Error("Request timed out"));
-              }, 5000);
+              timer = setTimeout(
+                () => reject(new Error("Request timed out")),
+                5000
+              );
             }),
           ]);
 
           clearTimeout(timer);
           if (!res.ok) {
-            return {
-              error: "fetch-failed",
-              books: [],
-            };
+            return { error: "fetch-failed", books: [] };
           }
 
           const data = await res.json();
-          const parse = data.docs.slice(0, 5);
-          const books = parse.map((b) => {
-            const coverUrl = b.cover_i
-              ? `https://covers.openlibrary.org/b/id/${b.cover_i}-L.jpg`
-              : Book.PLACEHOLDER;
-            return {
-              title: b.title,
-              author: b.author_name.join(", "),
-              cover_i: b.cover_i,
-              coverUrl: coverUrl,
-            };
-          });
+          const docs = data.docs.slice(0, 5);
 
-          return {
-            books: books,
-          };
+          const books = await Promise.all(
+            docs.map(async (b) => {
+              const coverUrl = b.cover_i
+                ? `https://covers.openlibrary.org/b/id/${b.cover_i}-L.jpg`
+                : Book.PLACEHOLDER;
+
+              let overview = "";
+
+              if (b.key) {
+                if (process.env.DEBUG === "true") {
+                  console.log(
+                    `[DEBUG] Fetching work details: https://openlibrary.org${b.key}.json`
+                  );
+                }
+                try {
+                  const workRes = await fetch(
+                    `https://openlibrary.org${b.key}.json`
+                  );
+                  if (workRes.ok) {
+                    const work = await workRes.json();
+
+                    if (typeof work.description === "string") {
+                      overview = work.description;
+                    } else if (work.description?.value) {
+                      overview = work.description.value;
+                    }
+                  }
+                } catch (err) {
+                  console.warn(
+                    `Failed to fetch work details for ${b.key}:`,
+                    err.message
+                  );
+                }
+              }
+
+              return {
+                title: b.title || "",
+                author: Array.isArray(b.author_name)
+                  ? b.author_name.join(", ")
+                  : "",
+                coverUrl: coverUrl,
+                isbn: Array.isArray(b.isbn) && b.isbn[0] ? b.isbn[0] : "",
+                overview: overview || "",
+                pages: b.number_of_pages_median
+                  ? String(b.number_of_pages_median)
+                  : "",
+                year: b.first_publish_year ? String(b.first_publish_year) : "",
+              };
+            })
+          );
+
+          if (process.env.DEBUG === "true") {
+            console.log(`[DEBUG] fetch_book returned ${books.length} books`);
+          }
+          return { books };
         } catch (error) {
-          return {
-            error: error.message,
-            books: [],
-          };
+          if (process.env.DEBUG === "true") {
+            console.error(`[DEBUG] fetch_book error:`, error.message);
+          }
+          return { error: error.message, books: [] };
         }
       },
     });
@@ -129,6 +173,9 @@ class Model {
         "Performs a web search using Serper and returns relevant results.",
       parameters: z.object({ query: z.string() }),
       execute: async function ({ query }) {
+        if (process.env.DEBUG === "true") {
+          console.log(`[DEBUG] serper_search called with query: ${query}`);
+        }
         try {
           let timer;
           const res = await Promise.race([
@@ -176,9 +223,13 @@ class Model {
 2. For each candidate build fields:
    - "title": exact title
    - "author": author(s) or ""
-   - "overview": use tool "serper_search" with 'Book <title> overview' and distill to 2-3 neutral sentences (no opinions, no spoilers). If insufficient data use "".
-   - "coverUrl": use https://covers.openlibrary.org/b/id/{cover_i}-L.jpg or placeholder if cover_i missing
-3. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"..."}, ...]}
+   - "overview": brief description. If description is not available or "", use tool "serper_search" to search for brief description.
+   - "coverUrl": cover image URL.
+   - "year": published year
+   - "genre": use tool "serper_search" with 'Book <title> genre' and collect appropriate genre(s) in an array. If insufficient data use [].
+   - "pages": number of median pages.
+   - "isbn": ISBN-13 or ISBN-10
+   3. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"...","year": "...","genre": ["...", ...],"isbn": "...","pages":"..."}, ...]}
 4. No commentary, no code fences.`,
       model: process.env.MODEL_NAME,
       tools: [fetchBooksTool, searchTool],
@@ -218,10 +269,22 @@ class Model {
   }
 
   async search(query) {
+    if (process.env.DEBUG === "true") {
+      console.log(`[DEBUG] search() called with query: ${query}`);
+    }
     await this.#init();
     const result = await this.#invoke(this.#searchAgent, query);
     let raw = String(result.finalOutput || "").trim();
+    if (process.env.DEBUG === "true") {
+      console.log(
+        `[DEBUG] Agent raw output (first 200 chars):`,
+        raw.slice(0, 200)
+      );
+    }
     const out = this.#parseJSON(raw, BooksSchema);
+    if (process.env.DEBUG === "true") {
+      console.log(`[DEBUG] Parsed ${out.books.length} books successfully`);
+    }
     return out.books;
   }
 

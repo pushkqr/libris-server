@@ -10,7 +10,9 @@ const getBooks = async function (req, res, next) {
 
     const agent = await getAgent();
     const result = await agent.search(search);
-    console.log(result);
+    if (process.env.DEBUG === "true") {
+      console.log("[DEBUG] Search result:", result);
+    }
     return res.status(200).json(result);
   } catch (error) {
     next(error);
@@ -33,22 +35,21 @@ const postBook = function (req, res, next) {
       isbn: isbn || "",
       overview: overview || "",
     });
-    const before = Book.fetchById(book.getId());
+    const before = Book.fetchById(book.getISBN());
     book.save();
+    if (process.env.DEBUG === "true") {
+      console.log(
+        `[DEBUG] Book saved: ${book.getTitle()} (ISBN: ${book.getISBN()})`
+      );
+    }
     if (before)
       return res
         .status(409)
-        .json({ error: "Book already exists", id: book.getId() });
+        .json({ error: "Book already exists", isbn: book.getISBN() });
 
     return res.status(201).json({
       message: "Book added successfully",
-      book: {
-        id: book.getId(),
-        title: book.getTitle(),
-        author: book.getAuthor(),
-        edition: book.getEdition(),
-        overview: book.getOverview(),
-      },
+      book: book.toJSON(),
     });
   } catch (error) {
     next(error);

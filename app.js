@@ -13,16 +13,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-const book = new Book({
-  title: "Computer Networks",
-  author: "Andrew S. Tanenbaum, David J. Wetherall",
-  edition: "5th edition",
-  coverUrl: "https://covers.openlibrary.org/b/isbn/978-0132126953-L.jpg",
-  overview:
-    "This textbook provides a structured approach to explaining how networks work from the inside out...",
-});
-book.save();
-console.log(book.getId());
+// const book = new Book({
+//   title: "Computer Networks",
+//   author: "Andrew S. Tanenbaum, David J. Wetherall",
+//   edition: "5th edition",
+//   coverUrl: "https://covers.openlibrary.org/b/isbn/978-0132126953-L.jpg",
+//   overview:
+//     "This textbook provides a structured approach to explaining how networks work from the inside out...",
+// });
+// book.save();
+// console.log(book.getISBN());
 
 app.use("/api/v2/books", booksRouter);
 app.use(errorController);
