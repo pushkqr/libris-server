@@ -11,6 +11,8 @@ class Book {
   #genre;
   #year;
   #pages;
+  #id;
+  #publisher;
 
   static PLACEHOLDER =
     "https://rhbooks.com.ng/wp-content/uploads/2022/03/book-placeholder.png";
@@ -24,8 +26,21 @@ class Book {
     this.#year = book.year || "";
     this.#genre = Array.isArray(book.genre) ? book.genre : [];
     this.#pages = book.pages || "";
+    this.#publisher = book.publisher || "";
+    this.#id = this.#generateId();
   }
 
+  #generateId() {
+    const normalized = `${this.#title}|${this.#author}|${this.#isbn}`
+      .toLowerCase()
+      .trim();
+
+    return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
+  }
+
+  getId() {
+    return this.#id;
+  }
   getTitle() {
     return this.#title;
   }
@@ -50,9 +65,13 @@ class Book {
   getYear() {
     return this.#year;
   }
+  getPublisher() {
+    return this.#publisher;
+  }
 
   toJSON() {
     return {
+      id: this.#id,
       title: this.#title,
       author: this.#author,
       coverUrl: this.#coverUrl,
@@ -61,6 +80,7 @@ class Book {
       isbn: this.#isbn,
       pages: this.#pages,
       year: this.#year,
+      publisher: this.#publisher,
     };
   }
 
@@ -69,7 +89,7 @@ class Book {
   }
 
   static fetchById(isbn) {
-    const book = books.find((b) => b.getISBN() === isbn);
+    const book = books.find((b) => b.getId() === isbn);
 
     if (!book) return null;
 
@@ -77,7 +97,7 @@ class Book {
   }
 
   static deleteById(isbn) {
-    const idx = books.findIndex((b) => b.getISBN() === isbn);
+    const idx = books.findIndex((b) => b.getId() === isbn);
 
     if (idx !== -1) {
       books.splice(idx, 1);
@@ -88,7 +108,7 @@ class Book {
   }
 
   save() {
-    if (!books.find((b) => b.getISBN() === this.getISBN())) {
+    if (!books.find((b) => b.getId() === this.getId())) {
       books.push(this);
     }
   }

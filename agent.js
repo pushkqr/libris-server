@@ -43,9 +43,10 @@ const BookSchema = z.object({
   year: z.string(),
   genre: z.array(z.string()),
   pages: z.string(),
+  publisher: z.string(),
 });
 const BooksSchema = z.object({
-  books: z.array(BookSchema).max(5),
+  books: z.array(BookSchema).max(10),
 });
 
 class Model {
@@ -82,11 +83,12 @@ class Model {
       parameters: z.object({ query: z.string() }),
       execute: async function ({ query }) {
         const encoded = encodeURIComponent(query);
+        const FETCH_LIMIT = 10;
         try {
           let timer;
           const res = await Promise.race([
             fetch(
-              `https://openlibrary.org/search.json?q=${encoded}&fields=key,title,author_name,cover_i,isbn,number_of_pages_median,first_publish_year&limit=5`
+              `https://openlibrary.org/search.json?q=${encoded}&fields=key,title,author_name,cover_i,isbn,number_of_pages_median,first_publish_year,subject,publisher&limit=${FETCH_LIMIT}`
             ),
             new Promise((_, reject) => {
               timer = setTimeout(
@@ -102,7 +104,7 @@ class Model {
           }
 
           const data = await res.json();
-          const docs = data.docs.slice(0, 5);
+          const docs = data.docs;
 
           const books = await Promise.all(
             docs.map(async (b) => {
@@ -151,6 +153,8 @@ class Model {
                   ? String(b.number_of_pages_median)
                   : "",
                 year: b.first_publish_year ? String(b.first_publish_year) : "",
+                subject: b.subject || [],
+                publisher: b.publisher || [],
               };
             })
           );
@@ -219,20 +223,27 @@ class Model {
     this.#searchAgent = new Agent({
       name: "Search Agent",
       instructions: `You are a book search assistant. Given a book query:
-1. Call tool "fetch_book" with the query to get up to 5 candidate books.
-2. For each candidate build fields:
+1. Call tool "fetch_book" with the query to get candidate books.
+2. Select candidate(s) relevant to the query.
+3. For selected candidate(s) build fields:
    - "title": exact title
    - "author": author(s) or ""
-   - "overview": brief description. If description is not available or "", use tool "serper_search" to search for brief description.
+   - "overview": brief description/overview. Clean the data if available in standard English.
    - "coverUrl": cover image URL.
    - "year": published year
-   - "genre": use tool "serper_search" with 'Book <title> genre' and collect appropriate genre(s) in an array. If insufficient data use [].
+   - "genre": select the top 3 most relevant genre(s) from property 'subject'.
    - "pages": number of median pages.
    - "isbn": ISBN-13 or ISBN-10
-   3. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"...","year": "...","genre": ["...", ...],"isbn": "...","pages":"..."}, ...]}
-4. No commentary, no code fences.`,
+   - "publisher": select the most relevant/most popular publishing agency related to the book from the property 'publisher'
+4. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"...","year": "...","genre": ["...", ...],"isbn": "...","pages":"...", "publisher": "..."}, ...]}
+5. No commentary, no code fences.
+6. CRITICAL RULES:
+   - Return ONLY valid JSON with NO extra text before or after
+   - NO commentary, NO markdown, NO explanations
+   - If you cannot determine a field, use "" or []`,
+
       model: process.env.MODEL_NAME,
-      tools: [fetchBooksTool, searchTool],
+      tools: [fetchBooksTool],
     });
 
     this.#initialized = true;
@@ -245,6 +256,12 @@ class Model {
         .replace(/```$/, "")
         .trim();
     }
+
+    const lastBrace = raw.lastIndexOf("}");
+    if (lastBrace !== -1 && lastBrace < raw.length - 1) {
+      raw = raw.substring(0, lastBrace + 1);
+    }
+
     try {
       let parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && schema === BooksSchema)

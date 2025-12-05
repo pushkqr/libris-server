@@ -9,10 +9,18 @@ const getBooks = async function (req, res, next) {
     }
 
     const agent = await getAgent();
-    const result = await agent.search(search);
+    let result = await agent.search(search);
+
+    result = result.map((b) => {
+      const book = new Book(b);
+      book.save();
+      return book.toJSON();
+    });
+
     if (process.env.DEBUG === "true") {
       console.log("[DEBUG] Search result:", result);
     }
+
     return res.status(200).json(result);
   } catch (error) {
     next(error);
