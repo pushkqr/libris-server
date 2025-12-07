@@ -81,8 +81,6 @@ app.use(express.urlencoded({ extended: false }));
 //   console.log(book.getId());
 // });
 
-console.log(Book.fetchAll());
-
 app.use("/api/v2/books", booksRouter);
 app.use(errorController);
 app.use(notFoundController);

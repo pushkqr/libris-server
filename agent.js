@@ -49,6 +49,64 @@ const BooksSchema = z.object({
   books: z.array(BookSchema).max(10),
 });
 
+const LINK_AGENT_INSTRUCTIONS = `You are a PDF link finder. Given a book query (title + author):
+
+1. Use brave_web_search ONCE with query: "book_title author filetype:pdf"
+2. Look for direct PDF links in search results (.pdf URLs)
+3. Prioritize:
+   - University/educational repositories (.edu, .ac.uk)
+   - Archive.org links
+   - Publisher preview/sample PDFs
+   - Open access repositories
+4. Verify links by calling tool 'validate_pdf_link' for each candidate (max 3 candidates)
+5. Return STRICT JSON: {"link": "https://...", ...]} (max 5 VALIDATED links)
+6. If none found, return {"links": []}
+
+CRITICAL RULES:
+- Call brave_web_search ONLY ONCE with optimized query
+- Return ONLY valid JSON with NO extra text
+- NO commentary, NO markdown, NO explanations
+- Only validate links that look like direct PDFs (end in .pdf or have pdf in URL)
+- Prefer .edu, .org, archive.org domains`;
+
+const SEARCH_AGENT_INSTRUCTIONS = `You are a book search assistant. Given a book query:
+1. Call tool "fetch_book" with the query to get candidate books.
+2. Only select the book(s) relevant to the query. 
+3. For selected book(s) build fields:
+   - "title": exact title
+   - "author": author(s) or ""
+   - "overview": brief description/overview. Clean the data if available in layman plain text standard English.
+   - "coverUrl": cover image URL.
+   - "year": published year
+   - "genre": select the top 3 most relevant genre(s) from property 'subject' in layman standard english.
+   - "pages": number of median pages.
+   - "isbn": ISBN-13 or ISBN-10
+   - "publisher": select the most relevant/most popular publishing agency related to the book from the property 'publisher'
+4. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"...","year": "...","genre": ["...", ...],"isbn": "...","pages":"...", "publisher": "..."}, ...]}
+5. No commentary, no code fences.
+6. CRITICAL RULES:
+   - Return ONLY valid JSON with NO extra text before or after
+   - NO commentary, NO markdown, NO explanations
+   - If you cannot determine a field, use "" or []`;
+
+const logger = {
+  debug: (...args) => {
+    if (process.env.DEBUG === "true") {
+      console.log("[DEBUG]", ...args);
+    }
+  },
+  warn: (...args) => {
+    if (process.env.DEBUG === "true") {
+      console.warn("[DEBUG]", ...args);
+    }
+  },
+  error: (...args) => {
+    if (process.env.DEBUG === "true") {
+      console.error("[DEBUG]", ...args);
+    }
+  },
+};
+
 class Model {
   #client;
   #linkAgent;
@@ -66,22 +124,112 @@ class Model {
     setTracingDisabled(process.env.DEBUG !== "true");
   }
 
-  async #init() {
-    if (this.#initialized) return;
-    const braveServer = new MCPServerStdio({
-      command: "npx",
-      args: ["-y", "@brave/brave-search-mcp-server"],
-      env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY },
-    });
-    await braveServer.connect();
-    this.#mcpServers.push(braveServer);
+  async #fetchWorkOverview(key) {
+    logger.debug(`Fetching work details: https://openlibrary.org${key}.json`);
+    try {
+      const workRes = await fetch(`https://openlibrary.org${key}.json`);
+      if (workRes.ok) {
+        const work = await workRes.json();
+        if (typeof work.description === "string") {
+          return work.description;
+        } else if (work.description?.value) {
+          return work.description.value;
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed to fetch work details for ${key}:`, err.message);
+    }
+    return "";
+  }
 
-    const fetchBooksTool = tool({
+  async #enrichBook(doc) {
+    const coverUrl = doc.cover_i
+      ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`
+      : Book.PLACEHOLDER;
+
+    let overview = "";
+    if (doc.key) {
+      overview = await this.#fetchWorkOverview(doc.key);
+    }
+
+    const sanitizeText = (text) => {
+      if (!text) return "";
+      return text
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, " ")
+        .replace(/\r/g, "")
+        .replace(/\t/g, " ")
+        .trim();
+    };
+
+    const bookData = {
+      title: doc.title || "",
+      author: Array.isArray(doc.author_name) ? doc.author_name.join(", ") : "",
+      coverUrl: coverUrl,
+      isbn: Array.isArray(doc.isbn) && doc.isbn[0] ? doc.isbn[0] : "",
+      overview: sanitizeText(overview),
+      pages: doc.number_of_pages_median
+        ? String(doc.number_of_pages_median)
+        : "",
+      year: doc.first_publish_year ? String(doc.first_publish_year) : "",
+      subject: doc.subject || [],
+      publisher: doc.publisher || [],
+    };
+
+    return bookData;
+  }
+
+  #createValidatePdfTool() {
+    return tool({
+      name: "validate_pdf_link",
+      description:
+        "Validate if a URL is an accessible PDF file by checking HTTP headers",
+      parameters: z.object({
+        url: z.string().url(),
+      }),
+      execute: async ({ url }) => {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000);
+
+          const res = await fetch(url, {
+            method: "HEAD",
+            signal: controller.signal,
+            redirect: "follow",
+          });
+
+          clearTimeout(timeout);
+
+          const contentType = res.headers.get("content-type") || "";
+          const isAccessible = res.ok;
+          const isPdf = contentType.includes("application/pdf");
+
+          return {
+            valid: isAccessible && isPdf,
+            status: res.status,
+            contentType: contentType,
+            url: url,
+          };
+        } catch (error) {
+          return {
+            valid: false,
+            error: error.message,
+            url: url,
+          };
+        }
+      },
+    });
+  }
+
+  #createFetchBooksTool() {
+    const self = this;
+    return tool({
       name: "fetch_book",
       description:
         "Fetch relevant books from OpenLibrary with detailed metadata (overview, pages, etc.).",
       parameters: z.object({ query: z.string() }),
-      execute: async function ({ query }) {
+      execute: async ({ query }) => {
         const encoded = encodeURIComponent(query);
         const FETCH_LIMIT = 10;
         try {
@@ -105,81 +253,27 @@ class Model {
 
           const data = await res.json();
           const docs = data.docs;
+          const books = await Promise.all(docs.map((b) => self.#enrichBook(b)));
 
-          const books = await Promise.all(
-            docs.map(async (b) => {
-              const coverUrl = b.cover_i
-                ? `https://covers.openlibrary.org/b/id/${b.cover_i}-L.jpg`
-                : Book.PLACEHOLDER;
-
-              let overview = "";
-
-              if (b.key) {
-                if (process.env.DEBUG === "true") {
-                  console.log(
-                    `[DEBUG] Fetching work details: https://openlibrary.org${b.key}.json`
-                  );
-                }
-                try {
-                  const workRes = await fetch(
-                    `https://openlibrary.org${b.key}.json`
-                  );
-                  if (workRes.ok) {
-                    const work = await workRes.json();
-
-                    if (typeof work.description === "string") {
-                      overview = work.description;
-                    } else if (work.description?.value) {
-                      overview = work.description.value;
-                    }
-                  }
-                } catch (err) {
-                  console.warn(
-                    `Failed to fetch work details for ${b.key}:`,
-                    err.message
-                  );
-                }
-              }
-
-              return {
-                title: b.title || "",
-                author: Array.isArray(b.author_name)
-                  ? b.author_name.join(", ")
-                  : "",
-                coverUrl: coverUrl,
-                isbn: Array.isArray(b.isbn) && b.isbn[0] ? b.isbn[0] : "",
-                overview: overview || "",
-                pages: b.number_of_pages_median
-                  ? String(b.number_of_pages_median)
-                  : "",
-                year: b.first_publish_year ? String(b.first_publish_year) : "",
-                subject: b.subject || [],
-                publisher: b.publisher || [],
-              };
-            })
-          );
-
-          if (process.env.DEBUG === "true") {
-            console.log(`[DEBUG] fetch_book returned ${books.length} books`);
-          }
+          logger.debug(`fetch_book returned ${books.length} books`);
           return { books };
         } catch (error) {
-          if (process.env.DEBUG === "true") {
-            console.error(`[DEBUG] fetch_book error:`, error.message);
-          }
+          logger.error(`fetch_book error:`, error.message);
           return { error: error.message, books: [] };
         }
       },
     });
-    const searchTool = tool({
+  }
+
+  #createSearchTool() {
+    // Reserved for future use (e.g., genre enrichment, publisher validation)
+    return tool({
       name: "serper_search",
       description:
-        "Performs a web search using Serper and returns relevant results.",
+        "Performs a web search using Serper and returns relevant results. Reserved for future use.",
       parameters: z.object({ query: z.string() }),
-      execute: async function ({ query }) {
-        if (process.env.DEBUG === "true") {
-          console.log(`[DEBUG] serper_search called with query: ${query}`);
-        }
+      execute: async ({ query }) => {
+        logger.debug(`serper_search called with query: ${query}`);
         try {
           let timer;
           const res = await Promise.race([
@@ -191,57 +285,52 @@ class Model {
             new Promise((_, reject) => {
               timer = setTimeout(() => {
                 reject(new Error("Request timed out"));
-              }, 5000);
+              }, 10000);
             }),
           ]);
 
           clearTimeout(timer);
 
           if (!res.ok) {
-            return {
-              error: "fetch-failed",
-            };
+            return { error: "fetch-failed" };
           }
 
           const data = await res.json();
-          return {
-            result: data,
-          };
+          return { result: data };
         } catch (error) {
           return { error: error.message };
         }
       },
     });
+  }
+
+  async #init() {
+    if (this.#initialized) return;
+
+    const braveServer = new MCPServerStdio({
+      command: "npx",
+      args: ["-y", "@brave/brave-search-mcp-server"],
+      env: { BRAVE_API_KEY: process.env.BRAVE_API_KEY },
+    });
+    await braveServer.connect();
+    this.#mcpServers.push(braveServer);
+
+    const fetchBooksTool = this.#createFetchBooksTool();
+    const validateLinksTool = this.#createValidatePdfTool();
+    // searchTool reserved for future use
+    const searchTool = this.#createSearchTool();
 
     this.#linkAgent = new Agent({
       name: "Link Agent",
-      instructions: `Return STRICT JSON: {"links": ["https://...", ...]} (max 5) for direct PDF candidates of the requested book. If none, {"links": []}. No commentary.`,
+      instructions: LINK_AGENT_INSTRUCTIONS,
       model: process.env.MODEL_NAME,
       mcpServers: [braveServer],
+      tools: [validateLinksTool],
     });
 
     this.#searchAgent = new Agent({
       name: "Search Agent",
-      instructions: `You are a book search assistant. Given a book query:
-1. Call tool "fetch_book" with the query to get candidate books.
-2. Select candidate(s) relevant to the query.
-3. For selected candidate(s) build fields:
-   - "title": exact title
-   - "author": author(s) or ""
-   - "overview": brief description/overview. Clean the data if available in standard English.
-   - "coverUrl": cover image URL.
-   - "year": published year
-   - "genre": select the top 3 most relevant genre(s) from property 'subject'.
-   - "pages": number of median pages.
-   - "isbn": ISBN-13 or ISBN-10
-   - "publisher": select the most relevant/most popular publishing agency related to the book from the property 'publisher'
-4. Return STRICT JSON: {"books":[{"title":"...","author":"...","overview":"...","coverUrl":"...","year": "...","genre": ["...", ...],"isbn": "...","pages":"...", "publisher": "..."}, ...]}
-5. No commentary, no code fences.
-6. CRITICAL RULES:
-   - Return ONLY valid JSON with NO extra text before or after
-   - NO commentary, NO markdown, NO explanations
-   - If you cannot determine a field, use "" or []`,
-
+      instructions: SEARCH_AGENT_INSTRUCTIONS,
       model: process.env.MODEL_NAME,
       tools: [fetchBooksTool],
     });
@@ -275,33 +364,16 @@ class Model {
 
   async #invoke(agent, query) {
     return run(agent, query);
-    // return Promise.race([
-    //   run(agent, query),
-    //   new Promise((_, reject) => {
-    //     setTimeout(() => {
-    //       reject(new Error("Agent Timeout"));
-    //     }, 60000);
-    //   }),
-    // ]);
   }
 
   async search(query) {
-    if (process.env.DEBUG === "true") {
-      console.log(`[DEBUG] search() called with query: ${query}`);
-    }
+    logger.debug(`search() called with query: ${query}`);
     await this.#init();
     const result = await this.#invoke(this.#searchAgent, query);
     let raw = String(result.finalOutput || "").trim();
-    if (process.env.DEBUG === "true") {
-      console.log(
-        `[DEBUG] Agent raw output (first 200 chars):`,
-        raw.slice(0, 200)
-      );
-    }
+    logger.debug(`Agent raw output (first 200 chars):`, raw.slice(0, 200));
     const out = this.#parseJSON(raw, BooksSchema);
-    if (process.env.DEBUG === "true") {
-      console.log(`[DEBUG] Parsed ${out.books.length} books successfully`);
-    }
+    logger.debug(`Parsed ${out.books.length} books successfully`);
     return out.books;
   }
 

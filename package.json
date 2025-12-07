@@ -15,8 +15,6 @@
     "dotenv": "^16.1.0",
     "dotenv-vault": "^1.27.0",
     "express": "^5.1.0",
-    "image-size": "^2.0.2",
-    "request-image-size": "^2.2.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
