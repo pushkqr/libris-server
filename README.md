@@ -2,8 +2,6 @@
 
 A smart book search and management backend powered by OpenAI Agents and Google Gemini.
 
-Repository: [https://github.com/pushkqr/libris-server](https://github.com/pushkqr/libris-server)
-
 ## Features
 
 - **AI Search**: Intelligent book discovery using OpenLibrary & Gemini.
