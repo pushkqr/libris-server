@@ -51,15 +51,15 @@ const BooksSchema = z.object({
 
 const LINK_AGENT_INSTRUCTIONS = `You are a PDF link finder. Given a book query (title + author):
 
-1. Use brave_web_search ONCE with query: "book_title author filetype:pdf"
+1. Use brave_web_search ONCE with query: "book_title author filetype:pdf download"
 2. Look for direct PDF links in search results (.pdf URLs)
 3. Prioritize:
    - University/educational repositories (.edu, .ac.uk)
    - Archive.org links
    - Publisher preview/sample PDFs
    - Open access repositories
-4. Verify links by calling tool 'validate_pdf_link' for each candidate (max 3 candidates)
-5. Return STRICT JSON: {"link": "https://...", ...]} (max 5 VALIDATED links)
+4. Verify links by calling tool 'validate_pdf_link' for each candidate
+5. Return STRICT JSON: {"links": ["https://...", ...]} (max 5 VALIDATED links). 
 6. If none found, return {"links": []}
 
 CRITICAL RULES:
@@ -378,10 +378,21 @@ class Model {
   }
 
   async fetchLinks(query) {
+    logger.debug(`fetchLinks() called with query: ${query}`);
+
+    const initStart = Date.now();
     await this.#init();
+    logger.debug(`Init check took: ${Date.now() - initStart}ms`);
+
+    const invokeStart = Date.now();
     const result = await this.#invoke(this.#linkAgent, query);
+    logger.debug(`Agent invocation took: ${Date.now() - invokeStart}ms`);
+
     let raw = String(result.finalOutput || "").trim();
+    logger.debug(`Agent raw output (first 200 chars):`, raw.slice(0, 200));
+
     const out = this.#parseJSON(raw, LinksSchema);
+    logger.debug(`Parsed ${out.links.length} links successfully`);
     return out.links;
   }
 

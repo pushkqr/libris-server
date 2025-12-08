@@ -13,6 +13,7 @@ class Book {
   #pages;
   #id;
   #publisher;
+  #download = [];
 
   static PLACEHOLDER =
     "https://rhbooks.com.ng/wp-content/uploads/2022/03/book-placeholder.png";
@@ -68,6 +69,13 @@ class Book {
   getPublisher() {
     return this.#publisher;
   }
+  getDownload() {
+    return this.#download;
+  }
+
+  setDownload(links) {
+    this.#download = links;
+  }
 
   toJSON() {
     return {
@@ -81,6 +89,7 @@ class Book {
       pages: this.#pages,
       year: this.#year,
       publisher: this.#publisher,
+      download: this.#download,
     };
   }
 
@@ -105,6 +114,13 @@ class Book {
     }
 
     return false;
+  }
+
+  static updateDownloadLinks(id, links) {
+    const book = books.find((b) => b.getId() === id);
+    if (book) {
+      book.setDownload(links);
+    }
   }
 
   save() {

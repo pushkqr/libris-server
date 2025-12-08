@@ -35,8 +35,28 @@ const getBookLinks = async (req, res, next) => {
       return res.status(404).json({ error: "Book not found" });
     }
 
-    const agent = await getAgent();
-    const links = await agent.fetchLinks(`${book.title} ${book.author}`);
+    if (process.env.DEBUG === "true") {
+      console.log(
+        `[DEBUG] Fetching links for book: ${book.title} by ${book.author}`
+      );
+    }
+
+    let links = [];
+
+    if (book.download && book.download.length > 0) {
+      links = book.download;
+      if (process.env.DEBUG === "true") {
+        console.log(`[DEBUG] Using cached links for book ${id}`);
+      }
+    } else {
+      const agent = await getAgent();
+      links = await agent.fetchLinks(`${book.title} ${book.author}`);
+      Book.updateDownloadLinks(id, links);
+    }
+
+    if (process.env.DEBUG === "true") {
+      console.log(`[DEBUG] Found ${links.length} links for book ${id}`);
+    }
 
     res.json({ links });
   } catch (error) {
