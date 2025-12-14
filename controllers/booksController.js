@@ -11,11 +11,13 @@ const getBooks = async function (req, res, next) {
     const agent = await getAgent();
     let result = await agent.search(search);
 
-    result = result.map((b) => {
-      const book = new Book(b);
-      book.save();
-      return book.toJSON();
-    });
+    result = await Promise.all(
+      result.map(async (b) => {
+        const book = new Book(b);
+        await book.save();
+        return book.toJSON();
+      })
+    );
 
     if (process.env.DEBUG === "true") {
       console.log("[DEBUG] Search result:", result);
@@ -27,7 +29,7 @@ const getBooks = async function (req, res, next) {
   }
 };
 
-const postBook = function (req, res, next) {
+const postBook = async function (req, res, next) {
   try {
     const { title, author, edition, isbn, coverUrl, overview } = req.body;
 
@@ -43,8 +45,8 @@ const postBook = function (req, res, next) {
       isbn: isbn || "",
       overview: overview || "",
     });
-    const before = Book.fetchById(book.getISBN());
-    book.save();
+    const before = await Book.fetchByHash(book.getHash());
+    await book.save();
     if (process.env.DEBUG === "true") {
       console.log(
         `[DEBUG] Book saved: ${book.getTitle()} (ISBN: ${book.getISBN()})`

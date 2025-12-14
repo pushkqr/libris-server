@@ -1,6 +1,51 @@
+const mongoose = require("mongoose");
 const crypto = require("crypto");
+const Schema = mongoose.Schema;
 
-const books = [];
+const bookSchema = new Schema({
+  hash: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true,
+  },
+  title: {
+    type: String,
+    required: true,
+  },
+  author: {
+    type: String,
+    required: true,
+  },
+  overview: {
+    type: String,
+  },
+  coverUrl: {
+    type: String,
+    required: true,
+  },
+  isbn: {
+    type: String,
+    required: true,
+  },
+  year: {
+    type: String,
+    required: true,
+  },
+  genre: {
+    type: Array,
+    required: true,
+  },
+  pages: {
+    type: String,
+    required: true,
+  },
+  download: {
+    type: Array,
+  },
+});
+
+const bookModel = mongoose.model("Book", bookSchema);
 
 class Book {
   #title;
@@ -11,7 +56,7 @@ class Book {
   #genre;
   #year;
   #pages;
-  #id;
+  #hash;
   #publisher;
   #download = [];
 
@@ -28,19 +73,16 @@ class Book {
     this.#genre = Array.isArray(book.genre) ? book.genre : [];
     this.#pages = book.pages || "";
     this.#publisher = book.publisher || "";
-    this.#id = this.#generateId();
+    this.#hash = this.#generateHash();
   }
 
-  #generateId() {
-    const normalized = `${this.#title}|${this.#author}|${this.#isbn}`
-      .toLowerCase()
-      .trim();
-
+  #generateHash() {
+    const normalized = `${this.#title}|${this.#author}`.toLowerCase().trim();
     return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
   }
 
-  getId() {
-    return this.#id;
+  getHash() {
+    return this.#hash;
   }
   getTitle() {
     return this.#title;
@@ -77,9 +119,25 @@ class Book {
     this.#download = links;
   }
 
+  static parse(book) {
+    return {
+      hash: book.hash,
+      title: book.title,
+      author: book.author,
+      coverUrl: book.coverUrl,
+      overview: book.overview,
+      genre: book.genre,
+      isbn: book.isbn,
+      pages: book.pages,
+      year: book.year,
+      publisher: book.publisher,
+      download: book.download,
+    };
+  }
+
   toJSON() {
     return {
-      id: this.#id,
+      hash: this.#hash,
       title: this.#title,
       author: this.#author,
       coverUrl: this.#coverUrl,
@@ -93,40 +151,37 @@ class Book {
     };
   }
 
-  static fetchAll() {
-    return books.map((b) => b.toJSON());
+  static async fetchAll() {
+    const books = await bookModel.find();
+    return books.map((b) => Book.parse(b));
   }
 
-  static fetchById(isbn) {
-    const book = books.find((b) => b.getId() === isbn);
-
+  static async fetchByHash(hash) {
+    const book = await bookModel.findOne({ hash: hash });
     if (!book) return null;
-
-    return book.toJSON();
+    return Book.parse(book);
   }
 
-  static deleteById(isbn) {
-    const idx = books.findIndex((b) => b.getId() === isbn);
-
-    if (idx !== -1) {
-      books.splice(idx, 1);
+  static async deleteByHash(hash) {
+    const res = await bookModel.findOneAndDelete({ hash: hash });
+    if (res) {
       return true;
     }
-
     return false;
   }
 
-  static updateDownloadLinks(id, links) {
-    const book = books.find((b) => b.getId() === id);
-    if (book) {
-      book.setDownload(links);
-    }
+  static async updateDownloadLinks(hash, links) {
+    await bookModel.findOneAndUpdate(
+      { hash: hash },
+      { $set: { download: links } }
+    );
   }
 
-  save() {
-    if (!books.find((b) => b.getId() === this.getId())) {
-      books.push(this);
-    }
+  async save() {
+    await bookModel.findOneAndUpdate({ hash: this.#hash }, this.toJSON(), {
+      upsert: true,
+      new: true,
+    });
   }
 }
 

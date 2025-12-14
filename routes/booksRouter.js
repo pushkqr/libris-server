@@ -6,8 +6,8 @@ const router = express.Router();
 router.get("/", booksController.searchBooks);
 router.post("/", booksController.addBook);
 
-router.get("/:id", bookController.getBookById);
-router.delete("/:id", bookController.deleteBookById);
-router.get("/:id/download", bookController.downloadBook);
+router.get("/:hash", bookController.getBookByHash);
+router.delete("/:hash", bookController.deleteBookByHash);
+router.get("/:hash/download", bookController.downloadBook);
 
 module.exports = router;
