@@ -36,6 +36,7 @@ A smart book search and management backend powered by OpenAI Agents and Google G
    MODEL_NAME=gemini-2.0-flash-exp
    BRAVE_API_KEY=your_brave_key
    SERPER_API_KEY=your_serper_key
+   DB_URL=your_db_uri
    ```
 
 3. **Run**
@@ -45,10 +46,10 @@ A smart book search and management backend powered by OpenAI Agents and Google G
 
 ## API Endpoints
 
-| Method   | Endpoint                     | Description      |
-| -------- | ---------------------------- | ---------------- |
-| `GET`    | `/api/v2/books?q=...`        | Search for books |
-| `POST`   | `/api/v2/books`              | Bookmark a book  |
-| `GET`    | `/api/v2/books/:id`          | Get book details |
-| `DELETE` | `/api/v2/books/:id`          | Delete a book    |
-| `GET`    | `/api/v2/books/:id/download` | Find PDF links   |
+| Method   | Endpoint                       | Description      |
+| -------- | ------------------------------ | ---------------- |
+| `GET`    | `/api/v2/books?q=...`          | Search for books |
+| `POST`   | `/api/v2/books`                | Bookmark a book  |
+| `GET`    | `/api/v2/books/:hash`          | Get book details |
+| `DELETE` | `/api/v2/books/:hash`          | Delete a book    |
+| `GET`    | `/api/v2/books/:hash/download` | Find PDF links   |
