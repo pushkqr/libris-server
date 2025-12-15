@@ -1,51 +1,8 @@
 const mongoose = require("mongoose");
 const crypto = require("crypto");
-const Schema = mongoose.Schema;
+const { BookODM } = require("../config.js");
 
-const bookSchema = new Schema({
-  hash: {
-    type: String,
-    required: true,
-    unique: true,
-    index: true,
-  },
-  title: {
-    type: String,
-    required: true,
-  },
-  author: {
-    type: String,
-    required: true,
-  },
-  overview: {
-    type: String,
-  },
-  coverUrl: {
-    type: String,
-    required: true,
-  },
-  isbn: {
-    type: String,
-    required: true,
-  },
-  year: {
-    type: String,
-    required: true,
-  },
-  genre: {
-    type: Array,
-    required: true,
-  },
-  pages: {
-    type: String,
-    required: true,
-  },
-  download: {
-    type: Array,
-  },
-});
-
-const bookModel = mongoose.model("Book", bookSchema);
+const bookModel = mongoose.models.Book || mongoose.model("Book", BookODM);
 
 class Book {
   #title;
@@ -160,6 +117,34 @@ class Book {
     const book = await bookModel.findOne({ hash: hash });
     if (!book) return null;
     return Book.parse(book);
+  }
+
+  static async fetchByExactQuery(query) {
+    const normalizedQuery = query.toLowerCase().trim();
+    const books = await bookModel.find({
+      cachedForQueries: normalizedQuery,
+    });
+    return books.map((b) => Book.parse(b));
+  }
+
+  static async searchByText(query, limit = 10) {
+    const books = await bookModel
+      .find({ $text: { $search: query } })
+      .sort({ score: { $meta: "textScore" } })
+      .limit(limit);
+    return books.map((b) => Book.parse(b));
+  }
+
+  static async saveWithQueryCache(bookData, query) {
+    const normalizedQuery = query.toLowerCase().trim();
+    await bookModel.findOneAndUpdate(
+      { hash: bookData.hash },
+      {
+        ...bookData,
+        $addToSet: { cachedForQueries: normalizedQuery },
+      },
+      { upsert: true, new: true }
+    );
   }
 
   static async deleteByHash(hash) {

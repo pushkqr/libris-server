@@ -1,29 +1,49 @@
 const getAgent = require("../agent");
 const Book = require("../models/book");
+const { logger, normalizeQuery, HTTP_STATUS } = require("../utils.js");
 
 const getBooks = async function (req, res, next) {
   try {
-    const { search } = req.query;
+    let { search } = req.query;
     if (!search) {
-      return res.status(400).json({ error: "Search query required" });
+      return res
+        .status(HTTP_STATUS.BAD_REQUEST)
+        .json({ error: "Search query required" });
     }
 
+    search = normalizeQuery(search);
+    let cachedResults = await Book.fetchByExactQuery(search);
+    if (cachedResults.length > 0) {
+      logger.debug(
+        `[EXACT CACHE HIT] ${cachedResults.length} results for: "${search}"`
+      );
+      return res.status(HTTP_STATUS.OK).json(cachedResults);
+    }
+
+    cachedResults = await Book.searchByText(search);
+
+    if (cachedResults.length >= 3) {
+      logger.debug(
+        `[TEXT SEARCH HIT] ${cachedResults.length} results for: "${search}"`
+      );
+      return res.status(HTTP_STATUS.OK).json(cachedResults);
+    }
+
+    logger.debug(`[CACHE MISS] Agent search for: "${search}"`);
     const agent = await getAgent();
     let result = await agent.search(search);
 
     result = await Promise.all(
       result.map(async (b) => {
         const book = new Book(b);
-        await book.save();
+        await Book.saveWithQueryCache(book.toJSON(), search);
         return book.toJSON();
       })
     );
 
-    if (process.env.DEBUG === "true") {
-      console.log("[DEBUG] Search result:", result);
-    }
+    logger.debug("Search result:", result);
 
-    return res.status(200).json(result);
+    return res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -34,7 +54,9 @@ const postBook = async function (req, res, next) {
     const { title, author, edition, isbn, coverUrl, overview } = req.body;
 
     if (!title || !author) {
-      return res.status(400).json({ error: "Title and author required" });
+      return res
+        .status(HTTP_STATUS.BAD_REQUEST)
+        .json({ error: "Title and author required" });
     }
 
     const book = new Book({
@@ -47,17 +69,16 @@ const postBook = async function (req, res, next) {
     });
     const before = await Book.fetchByHash(book.getHash());
     await book.save();
-    if (process.env.DEBUG === "true") {
-      console.log(
-        `[DEBUG] Book saved: ${book.getTitle()} (ISBN: ${book.getISBN()})`
-      );
-    }
+    logger.debug(
+      `[DEBUG] Book saved: ${book.getTitle()} (ISBN: ${book.getHash()})`
+    );
+
     if (before)
       return res
-        .status(409)
-        .json({ error: "Book already exists", isbn: book.getISBN() });
+        .status(HTTP_STATUS.CONFLICT)
+        .json({ error: "Book already exists", isbn: book.getHash() });
 
-    return res.status(201).json({
+    return res.status(HTTP_STATUS.CREATED).json({
       message: "Book added successfully",
       book: book.toJSON(),
     });

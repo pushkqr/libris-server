@@ -1,12 +1,14 @@
+const { HTTP_STATUS } = require("../utils.js");
+
 const errorController = function (err, req, res, next) {
   console.error(err.stack);
-  res.status(err.status || 500).json({
+  res.status(err.status || HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
     error: err.message || "Internal Server Error",
   });
 };
 
 const notFoundController = function (req, res) {
-  res.status(404).json({ error: "Route not found" });
+  res.status(HTTP_STATUS.NOT_FOUND).json({ error: "Route not found" });
 };
 
 module.exports = {
